@@ -1,0 +1,276 @@
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UploadedFiles,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { CoursesService } from './course.service';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth
+} from '@nestjs/swagger';
+import { CreateCourseDto } from './dto/create-course.dto';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { CreateLessonDto } from '../lesson/dto/create-lesson.dto';
+import { UploadApiResponse } from 'cloudinary';
+import { ApiCreateCourseDoc } from './doc/createCourse.doc';
+import { ApiCreateLessonDoc } from './doc/createLesson.doc';
+import { ApiGetAllCoursesDocs } from './doc/getCourse.doc';
+import { ApiGetCourseByIdDoc } from './doc/getCourseById.doc';
+import { AuthGuard } from '@nestjs/passport';
+import { CourseFeedbackService } from '../CourseFeedback/courseFeedback.service';
+import { ApiChangeCourseVisibilityDoc } from './doc/chageVisibility.doc';
+import { ApiChangeStatusCourseDoc } from './doc/changeStatus.doc';
+import { ApiGetAllPublicCourses } from './doc/getAllPublicCourses.doc';
+import { Category, CourseDifficulty } from './entities/course.entity';
+import { Roles, RolesGuard } from '../auth/guards/verify-role.guard';
+import { ApiApprovedCourseDoc } from './doc/aprovedCourse.doc';
+import { ApiDeclineCourseDoc } from './doc/declineCourse.doc';
+import { ApiGetAllCoursesAdminDocs } from './doc/getCourseAdmin.doc';
+import { ApiCreateCourseAdminDoc } from './doc/createCourseAdmin.doc';
+import { ApiHasUserFeedbackDoc } from './doc/hasUserFeedBack.doc';
+
+@Controller('courses')
+export class CoursesController {
+  constructor(
+    private readonly coursesService: CoursesService,
+    private readonly cloudinaryService: CloudinaryService,
+    private readonly feedbackService: CourseFeedbackService,
+  ) {}
+
+  @Post(':professorId/create')
+  @ApiCreateCourseDoc()
+  @UseGuards(AuthGuard('jwt'))
+  async createCourse(
+    @Param('professorId') professorId: string,
+    @Body() data: CreateCourseDto,
+  ) {
+    return this.coursesService.createCourse(professorId, data);
+  }
+
+  @Post('create/admin')
+  @ApiCreateCourseAdminDoc()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  async createCourseAdmin(@Body() data: CreateCourseDto, @Req() req) {
+    const adminId = req.user.sub;
+    return await this.coursesService.createCourseAdmin(adminId, data);
+  }
+
+  @Post(':courseId/lessons')
+  @ApiCreateLessonDoc()
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'videos', maxCount: 5 },
+      { name: 'pdfs', maxCount: 10 },
+    ]),
+  )
+  async addLessonToCourse(
+    @Param('courseId') courseId: string,
+    @Body() data: CreateLessonDto,
+    @UploadedFiles()
+    files?: { videos?: Express.Multer.File[]; pdfs?: Express.Multer.File[] },
+  ) {
+    const course = await this.coursesService.getCourseById(courseId);
+
+    if (!course) {
+      throw new NotFoundException(`Curso con ID ${courseId} no encontrado`);
+    }
+
+    // Subidas y validaciones personalizadas
+    const videoUrls = await this.uploadFiles(files?.videos, 'video', 'videos');
+    const pdfUrls = await this.uploadFiles(files?.pdfs, 'pdf', 'PDFs');
+
+    return this.coursesService.addLessonToCourse(courseId, {
+      ...data,
+      urlVideos: videoUrls,
+      urlPdfs: pdfUrls,
+    });
+  }
+
+  private async uploadFiles(
+    files: Express.Multer.File[] | undefined,
+    fileType: 'video' | 'pdf',
+    fileTypeName: string,
+  ): Promise<string[]> {
+    if (!files?.length) return [];
+
+    const maxSize = 50 * 1024 * 1024; // 50 MB
+
+    for (const file of files) {
+      if (file.size > maxSize) {
+        throw new BadRequestException(
+          `El ${fileTypeName} "${file.originalname}" supera los 50 MB.`,
+        );
+      }
+
+      if (fileType === 'video' && !file.mimetype.startsWith('video/')) {
+        throw new BadRequestException(
+          `"${file.originalname}" no es un archivo de video válido.`,
+        );
+      }
+
+      if (fileType === 'pdf' && file.mimetype !== 'application/pdf') {
+        throw new BadRequestException(
+          `"${file.originalname}" no es un archivo PDF válido.`,
+        );
+      }
+    }
+
+    try {
+      const uploadPromises = files.map((file) =>
+        fileType === 'video'
+          ? this.cloudinaryService.uploadVideo(file)
+          : this.cloudinaryService.uploadLessonDocument(file),
+      );
+
+      const uploadResults = await Promise.all(uploadPromises);
+
+      const fileUrls = uploadResults
+        .filter((result): result is UploadApiResponse => !!result?.secure_url)
+        .map((result) => result.secure_url);
+
+      if (fileUrls.length !== files.length) {
+        throw new BadRequestException(
+          `Error al subir uno o más ${fileTypeName}. Verificá el formato y tamaño.`,
+        );
+      }
+
+      return fileUrls;
+    } catch (error) {
+      throw new BadRequestException(
+        `Error al procesar los ${fileTypeName}. Intentá nuevamente.`,
+      );
+    }
+  }
+
+  @Get()
+  @ApiGetAllCoursesDocs()
+  async getAllCourses(
+    @Query('title') title?: string,
+    @Query('category') category?: Category,
+    @Query('difficulty') difficulty?: CourseDifficulty,
+    @Query('isActive') isActive?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
+  ) {
+    const validSortBy = ['title', 'price', 'createdAt', 'rating'];
+    const finalSortBy =
+      sortBy && validSortBy.includes(sortBy) ? sortBy : 'createdAt';
+
+    const validSortOrder = ['asc', 'desc'];
+    const finalSortOrder =
+      sortOrder && validSortOrder.includes(sortOrder.toLowerCase())
+        ? (sortOrder.toLowerCase() as 'asc' | 'desc')
+        : 'desc';
+
+    return await this.coursesService.getAllCourses(
+      title,
+      category,
+      difficulty,
+      finalSortBy,
+      finalSortOrder,
+    );
+  }
+
+  @Get('admin')
+  @ApiGetAllCoursesAdminDocs()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  async getAllCoursesAdmin(
+    @Query('title') title?: string,
+    @Query('category') category?: Category,
+    @Query('difficulty') difficulty?: CourseDifficulty,
+    @Query('isActive') isActive?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
+  ) {
+    const isActiveBoolean =
+      isActive === 'true' ? true : isActive === 'false' ? false : undefined;
+
+    const validSortBy = ['title', 'price', 'createdAt', 'rating'];
+    const finalSortBy =
+      sortBy && validSortBy.includes(sortBy) ? sortBy : 'createdAt';
+
+    const validSortOrder = ['asc', 'desc'];
+    const finalSortOrder =
+      sortOrder && validSortOrder.includes(sortOrder.toLowerCase())
+        ? (sortOrder.toLowerCase() as 'asc' | 'desc')
+        : 'desc';
+
+    return await this.coursesService.getAllCoursesAdmin(
+      title,
+      category,
+      difficulty,
+      isActiveBoolean,
+      finalSortBy,
+      finalSortOrder,
+    );
+  }
+  @Get('/public')
+  @ApiGetAllPublicCourses()
+  async getAllPulicCourses() {
+    return await this.coursesService.getAllPulicCourses();
+  }
+
+  @Get(':id')
+  @ApiGetCourseByIdDoc()
+  async getUserById(@Param('id', ParseUUIDPipe) id: string) {
+    return await this.coursesService.getCourseById(id);
+  }
+
+  @Get(':courseId/user-feedback')
+  @ApiHasUserFeedbackDoc()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiBearerAuth()
+  async hasUserFeedback(@Param('courseId') courseId: string, @Req() req) {
+    const userId = req.user.sub;
+    const hasFeedback = await this.feedbackService.hasUserFeedback(
+      userId,
+      courseId,
+    );
+    return { hasFeedback };
+  }
+
+  @Patch('change/visibility/:courseId')
+  @ApiChangeCourseVisibilityDoc()
+  async changeVisivility(@Param('courseId', ParseUUIDPipe) courseId: string) {
+    return await this.coursesService.changeVisivility(courseId);
+  }
+
+  @Patch('/:courseId/status')
+  @ApiChangeStatusCourseDoc()
+  async changeStatus(@Param('courseId', ParseUUIDPipe) courseId: string) {
+    return await this.coursesService.changeStatus(courseId);
+  }
+
+  @Patch(':courseId/aproved')
+  @ApiApprovedCourseDoc()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  async aprovedCourse(@Param('courseId', ParseUUIDPipe) courseId: string) {
+    return await this.coursesService.aprovedCourse(courseId);
+  }
+
+  @Patch(':courseId/decline')
+  @ApiDeclineCourseDoc()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  async declineCourse(
+    @Param('courseId', ParseUUIDPipe) courseId: string,
+    @Body('reason') reason: string,
+  ) {
+    return await this.coursesService.declineCourse(reason, courseId);
+  }
+}

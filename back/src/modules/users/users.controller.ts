@@ -1,0 +1,172 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Param,
+  Delete,
+  UseInterceptors,
+  UploadedFile,
+  UseGuards,
+  NotFoundException,
+  ParseUUIDPipe,
+  MaxFileSizeValidator,
+  ParseFilePipe,
+  FileTypeValidator,
+  Query,
+  Req,
+  Body,
+} from '@nestjs/common';
+import { UsersService } from './users.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
+import { ApiUpdateImageDocs } from './doc/updateImage.doc';
+import { ApigetAllActiveUsersDocs } from './doc/getAllActiveUsers.doc';
+import { ApiGetUserById } from './doc/getUserById.doc';
+import { ApiDeleteUserById } from './doc/deleteUserById.doc';
+import { ApiUpdateChecboxbyId } from './doc/updateChecbox.doc';
+import { UserRole } from './enums/user-role.enum';
+import { AuthGuard } from '@nestjs/passport';
+import { ApigetAllInactiveUsersDocs } from './doc/getAllInactiveUsers.doc';
+import { ApigetAllUsersDocs } from './doc/getAllUsers.doc';
+import { ApiActivateUserDocs } from './doc/activateUserById.doc';
+import { ApiGetUserByRoleDocs } from './doc/getUserByRole.doc';
+import { UpdateUserProfileDto } from './dto/update-user.dto';
+import { ApiUpdateUserProfile } from './doc/updateUser.doc';
+import { Roles, RolesGuard } from '../auth/guards/verify-role.guard';
+import { DesactivatedUserDto } from './dto/desactivate-user.dto';
+
+@ApiTags('users')
+@Controller('users')
+export class UsersController {
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly cloudinaryService: CloudinaryService,
+  ) {}
+  // @ApiConsumes('application/x-www-form-urlencoded')
+  // @Post()
+  // async create(@Body() createUserDto: CreateUserDto) {
+  //   await this.usersService.create(createUserDto);
+
+  //   const { password, confirmPassword, ...userExceptionPassword } =
+  //     createUserDto;
+
+  //   return userExceptionPassword;
+  // }
+
+  // @ApiBearerAuth()
+  @ApiConsumes('application/x-www-form-urlencoded')
+  @Post(':id/upload/profile')
+  // @UseGuards(AuthGuard)
+  @ApiUpdateImageDocs()
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadProfilePicture(
+    @Param('id', new ParseUUIDPipe({ version: '4' }))
+    id: string,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({
+            maxSize: 1024 * 1024,
+            message: 'La imagen no puede superar 1 MB.',
+          }),
+          new FileTypeValidator({
+            fileType: /(jpg|jpeg|png|webp)$/i,
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    const result = await this.cloudinaryService.uploadImage(file);
+    if (!result?.secure_url) {
+      throw new NotFoundException('Error al subir la imagen');
+    }
+
+    return this.usersService.updateUserImage(id, result.secure_url);
+  }
+
+  @Get()
+  @ApigetAllUsersDocs()
+  getAllUsers() {
+    return this.usersService.getAllUsers();
+  }
+
+  @Get('active')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  @ApigetAllActiveUsersDocs()
+  getAllActiveUser() {
+    return this.usersService.getAllActiveUser();
+  }
+
+  @Get('inactive')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  @ApigetAllInactiveUsersDocs()
+  getAllInactiveUser() {
+    return this.usersService.getAllInactiveUser();
+  }
+
+  @Get('role')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @ApiGetUserByRoleDocs()
+  @Roles('admin')
+  async getUserByRole(@Query('role') role: UserRole) {
+    return await this.usersService.getUserByRole(role);
+  }
+
+  @Get('me/purchased-courses')
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Obtener cursos comprados del usuario autenticado' })
+  @ApiBearerAuth()
+  async getMyPurchasedCourses(@Req() req) {
+    const userId = req.user.sub;
+    return this.usersService.getUserPurchasedCourses(userId);
+  }
+
+  @Get(':id')
+  @ApiGetUserById()
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.getUserById(id);
+  }
+
+  @Patch('/update')
+  @ApiUpdateUserProfile()
+  @UseGuards(AuthGuard('jwt'))
+  updateUser(@Req() req, @Body() data: UpdateUserProfileDto) {
+    const userId = req.user.sub;
+    return this.usersService.updateUser(userId, data);
+  }
+
+  @Delete(':id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  @ApiDeleteUserById()
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() desactivateDto: DesactivatedUserDto,
+  ) {
+    return this.usersService.deleteUser(id, desactivateDto);
+  }
+
+  @Patch('checkbox/:id')
+  @ApiUpdateChecboxbyId()
+  updateCheckbox(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.updateCheckbox(id);
+  }
+
+  @Patch('activate/:userId')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  @ApiActivateUserDocs()
+  activateUser(@Param('userId', ParseUUIDPipe) userId: string) {
+    return this.usersService.activateUser(userId);
+  }
+}

@@ -1,0 +1,231 @@
+import { Exclude } from 'class-transformer';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  OneToMany,
+  OneToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { v4 as UUID } from 'uuid';
+import { UserRole } from '../enums/user-role.enum';
+import { ProfessorProfile } from 'src/modules/profiles/entities/professor-profile.entity';
+import { StudentProfile } from 'src/modules/studentprofile/entities/studentprofile.entity';
+import { Enrollment } from 'src/modules/enrollments/entities/enrollment.entity';
+import { Cart } from 'src/modules/cart/entities/cart.entity';
+import { LessonProgress } from 'src/modules/LessonProgress/entities/lessoprogress.entity';
+import { CourseFeedback } from 'src/modules/CourseFeedback/entities/courseFeedback.entity';
+import { Payment } from 'src/modules/payments/entities/payment.entity';
+import { Course } from 'src/modules/course/entities/course.entity';
+
+export enum Gender {
+  MASCULINO = 'masculino',
+  FEMENINO = 'femenino',
+  OTRO = 'otro',
+}
+
+@Entity('users')
+export class User {
+  @PrimaryGeneratedColumn('uuid')
+  id: string = UUID();
+
+  @Column({
+    type: 'varchar',
+    length: 70,
+    nullable: false,
+  })
+  name: string;
+
+  @Column({
+    type: 'varchar',
+    length: 60,
+    nullable: false,
+    unique: true,
+  })
+  email: string;
+
+  @Column({
+    type: 'varchar',
+    length: 250,
+    nullable: true, // Debe ser true para usuarios de Google
+  })
+  @Exclude()
+  password?: string;
+
+  @Column({
+    type: 'enum',
+    enum: UserRole,
+    nullable: true,
+  })
+  role: UserRole;
+
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  ciudad?: string;
+
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+  })
+  direccion?: string;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  dni?: string;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  telefono?: string;
+
+  @Column({
+    type: 'date',
+    nullable: true,
+  })
+  fechaNacimiento?: Date;
+
+  @Column({
+    type: 'enum',
+    enum: Gender,
+    nullable: true,
+  })
+  genero?: Gender;
+
+  @Column({
+    type: 'boolean',
+    default: true,
+  })
+  isActive: boolean;
+
+  @Column({
+    type: 'boolean',
+    default: false,
+    nullable: false,
+  })
+  checkBoxTerms: boolean;
+
+  @Column({
+    type: 'boolean',
+    default: false,
+  })
+  isGoogleAccount: boolean; //Para saber si se registró con Google
+
+  @Column({
+    type: 'boolean',
+    default: false,
+  })
+  isGitHubAccount: boolean; //Para saber si se registró con GitHub
+
+  @Column({
+    nullable: true,
+    unique: true,
+  })
+  @Index()
+  googleId?: string; //auth0Id para google
+
+  @Column({
+    nullable: true,
+    unique: true,
+  })
+  @Index()
+  githubId?: string; //auth0Id para google
+
+  @Column({
+    type: 'varchar',
+    length: 250,
+    nullable: true,
+  })
+  image: string;
+
+  @Column({
+    type: 'string',
+  })
+  @Column({ default: false })
+  isEmailVerified: boolean; //Se pondrá a true si es de Google
+
+  @Column({ nullable: true })
+  emailVerificationToken?: string;
+
+  @Column({ nullable: true })
+  resetPasswordToken?: string;
+
+  @Column({ type: 'timestamp', nullable: true })
+  resetPasswordExpires?: Date;
+
+  @Column({ type: 'varchar', length: 250, nullable: true })
+  @Exclude()
+  newPasswordRequest?: string; // Guardará el hash de la nueva contraseña
+
+  @Column({ nullable: true, unique: true })
+  newPasswordToken?: string; // Token para confirmar el cambio por email
+
+  @Column({ default: false })
+  hasCompletedProfile: boolean;
+
+  @Column({type: 'text', nullable: true})
+  suspensionReason: string | null;
+
+  @Column({type: 'boolean', default: false})
+  isRequestingTeacherRole: boolean;
+
+  @CreateDateColumn()
+  @Exclude()
+  RequestingTeacherRoleDate: Date;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+
+  @OneToOne(() => ProfessorProfile, (profile) => profile.user, {
+    cascade: true,
+  })
+  professorProfile: ProfessorProfile;
+
+  @OneToOne(() => StudentProfile, (profile) => profile.user, { cascade: true })
+  studentProfile: StudentProfile;
+
+  @OneToMany(() => Enrollment, (enrollment) => enrollment.user)
+  enrollments: Enrollment[];
+
+  @OneToOne(() => Cart, (cart) => cart.user, { cascade: true })
+  cart: Cart;
+
+  @OneToMany(() => Course, (course) => course.user)
+  courses: Course[];
+
+  @OneToMany(() => CourseFeedback, (feedback) => feedback.user)
+  courseFeedbacks: CourseFeedback[];
+
+  @OneToMany(() => LessonProgress, (progress) => progress.user)
+  lessonProgress: LessonProgress[];
+
+  @OneToMany(() => Payment, (payment) => payment.user)
+  payments: Payment[];
+
+  isTeacher(): boolean {
+    return this.role === UserRole.TEACHER;
+  }
+
+  isAdmin(): boolean {
+    return this.role === UserRole.ADMIN;
+  }
+
+  isStudent(): boolean {
+    return this.role === UserRole.STUDENT;
+  }
+}
+
+export { UserRole };
